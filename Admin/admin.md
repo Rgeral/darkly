@@ -1,131 +1,131 @@
-# Darkly — README: Sensitive File Exposure via `robots.txt` and Weak Credential Storage
+# Darkly — README : Exposition de fichiers sensibles via `robots.txt` et stockage faible des identifiants
 
-## Summary
-This document analyzes a vulnerability chain in which sensitive authentication material is indirectly exposed through the `robots.txt` file. Search engine exclusion directives point to a hidden directory, which contains an `.htpasswd` file storing an MD5-hashed password. When the hash is cracked, it allows unauthorized access to the `/admin` page, ultimately revealing a flag.
+## Résumé
+Ce document analyse une chaîne de vulnérabilités dans laquelle des informations d’authentification sensibles sont exposées indirectement via le fichier `robots.txt`. Des directives d’exclusion pour les moteurs de recherche pointent vers un répertoire caché, lequel contient un fichier `.htpasswd` stockant un mot de passe haché en MD5. Une fois le hash cassé, il permet un accès non autorisé à la page `/admin`, révélant finalement un flag.
 
-The goal of this README is to clearly explain how the vulnerability occurs, how it can be reproduced, and how it must be remediated to prevent similar issues.
-
----
-
-## Vulnerability overview
-- **Type:** Information Disclosure, Weak Credential Storage, Poor Access Control
-- **Entry point:** `robots.txt`
-- **Affected paths:** `/robots.txt`, `/whatever`, `/admin`, `.htpasswd`
-- **Underlying issue:** Sensitive resources are exposed through predictable locations, and credentials are stored using weak cryptographic hashing.
+L’objectif de ce README est d’expliquer clairement comment la vulnérabilité apparaît, comment elle peut être reproduite, et comment elle doit être corrigée afin d’éviter des problèmes similaires.
 
 ---
 
-## Proof of concept (high level)
-1. Navigate to:
+## Vue d’ensemble de la vulnérabilité
+- **Type :** Divulgation d’information, stockage faible des identifiants, contrôle d’accès insuffisant
+- **Point d’entrée :** `robots.txt`
+- **Chemins affectés :** `/robots.txt`, `/whatever`, `/admin`, `.htpasswd`
+- **Problème sous-jacent :** Des ressources sensibles sont exposées via des emplacements prévisibles et les identifiants sont stockés à l’aide d’un algorithme de hachage cryptographiquement faible.
+
+---
+
+## Preuve de concept (niveau élevé)
+1. Accéder à :
    ```
    http://10.14.200.249/robots.txt
    ```
-   The file includes a directive:
+   Le fichier contient la directive :
    ```
    Disallow: /whatever
    ```
 
-2. Visiting this directory reveals an `.htpasswd` file containing:
+2. La consultation de ce répertoire révèle un fichier `.htpasswd` contenant :
    ```
    root:437394baff5aa33daa618be47b75cb49
    ```
 
-3. The hash uses **MD5**, a deprecated and easily crackable hashing function.
-   Once cracked, it yields a valid password.
+3. Le hash utilise **MD5**, une fonction de hachage obsolète et facilement cassable.
+   Une fois cassé, il fournit un mot de passe valide.
 
-4. Using this recovered password on:
+4. En utilisant ce mot de passe sur :
    ```
    http://10.14.200.249/admin
    ```
-   grants access to the administrator panel, which exposes a flag.
+   on obtient un accès au panneau d’administration, qui expose un flag.
 
-This chain demonstrates how seemingly harmless metadata (`robots.txt`) can reveal sensitive resources when not designed or protected correctly.
+Cette chaîne montre comment des métadonnées apparemment anodines (`robots.txt`) peuvent révéler des ressources sensibles lorsqu’elles sont mal conçues ou mal protégées.
 
 ---
 
-## Root cause analysis
-1. **Inappropriate use of `robots.txt` for hiding content.**
-   - The `robots.txt` file is intended for search engine crawlers, not as a security mechanism.
-   - Directories listed under `Disallow` are publicly visible to all clients and often attract attackers.
+## Analyse de la cause racine
+1. **Utilisation inappropriée de `robots.txt` pour cacher du contenu**
+   - Le fichier `robots.txt` est destiné aux robots d’indexation, pas à la sécurité.
+   - Les répertoires listés dans `Disallow` sont visibles publiquement et attirent souvent les attaquants.
 
-2. **Exposure of authentication-related files.**
-   - The `.htpasswd` file is accessible from the web root.
-   - No access control prevents direct download.
+2. **Exposition de fichiers liés à l’authentification**
+   - Le fichier `.htpasswd` est accessible depuis la racine web.
+   - Aucun contrôle d’accès n’empêche son téléchargement direct.
 
-3. **Weak cryptographic hashing (MD5).**
-   - MD5 is vulnerable to brute force attacks and widely considered insecure.
-   - Storing passwords with MD5 enables trivial offline cracking.
+3. **Hachage cryptographique faible (MD5)**
+   - MD5 est vulnérable aux attaques par force brute et est largement considéré comme non sécurisé.
+   - Stocker des mots de passe en MD5 permet un cassage hors-ligne trivial.
 
-4. **Lack of server-side protection for sensitive directories.**
-   - Sensitive areas under `/whatever` lack configuration rules such as `Deny from all`, authorization requirements, or removal from the public document root.
+4. **Absence de protection côté serveur pour les répertoires sensibles**
+   - Les zones sensibles sous `/whatever` ne disposent pas de règles de configuration telles que `Deny from all`, d’exigences d’authentification ou d’un retrait de la racine publique.
 
-5. **No rate-limiting or monitoring.**
-   - Access to `.htpasswd` is not flagged.
-   - Attack patterns originating from enumeration attempts are not detected.
+5. **Absence de limitation de débit et de surveillance**
+   - L’accès au fichier `.htpasswd` n’est pas détecté.
+   - Les schémas d’attaque issus de tentatives d’énumération ne sont pas identifiés.
 
 ---
 
 ## Impact
-- **Unauthorized administrative access.** Cracked credentials allow login to the admin interface.
-- **Confidentiality breach.** Exposure of hashed passwords compromises the integrity of authentication.
-- **Chainable attack surface.** With administrative credentials, an attacker may modify content, escalate further, or plant malicious payloads.
-- **False sense of security due to misuse of `robots.txt`.** Developers may incorrectly assume hidden paths are protected.
+- **Accès administrateur non autorisé :** Les identifiants cassés permettent la connexion à l’interface admin.
+- **Atteinte à la confidentialité :** L’exposition de mots de passe hachés compromet le système d’authentification.
+- **Surface d’attaque chaînable :** Avec des identifiants administrateur, un attaquant peut modifier le contenu, élever ses privilèges ou injecter du code malveillant.
+- **Faux sentiment de sécurité dû à `robots.txt` :** Les développeurs peuvent croire à tort que des chemins « cachés » sont protégés.
 
-Severity assessment: **High**, due to direct administrative access resulting from publicly accessible authentication data.
+Évaluation de la sévérité : **Élevée**, en raison de l’accès administratif direct résultant de données d’authentification accessibles publiquement.
 
 ---
 
-## Remediation (recommended fixes)
-Implement the following mitigations to eliminate the vulnerability and prevent recurrence.
+## Remédiation (correctifs recommandés)
+Mettre en œuvre les mesures suivantes pour éliminer la vulnérabilité et éviter toute récidive.
 
-### 1. Remove sensitive directories from public web root
-- Authentication files like `.htpasswd` must never be directly accessible.
-- Store them outside the document root or ensure strong access control rules.
+### 1. Retirer les répertoires sensibles de la racine web publique
+- Les fichiers d’authentification comme `.htpasswd` ne doivent jamais être accessibles directement.
+- Ils doivent être stockés hors de la racine publique ou protégés par des règles d’accès strictes.
 
-### 2. Do not rely on `robots.txt` for security
-- `robots.txt` only communicates crawling preferences; it provides no protection.
-- Avoid listing sensitive directories in `robots.txt` entirely.
-- If a directory must not be indexed, combine this with proper access restrictions.
+### 2. Ne pas s’appuyer sur `robots.txt` pour la sécurité
+- `robots.txt` ne fait que communiquer des préférences d’indexation ; il n’offre aucune protection.
+- Éviter totalement d’y lister des répertoires sensibles.
+- Si un répertoire ne doit pas être indexé, cela doit être combiné à de véritables restrictions d’accès.
 
-### 3. Enforce strict server-side access control
-- Apply directory-level restrictions using server configuration (e.g., `.htaccess`, Nginx location rules).
-- Disallow direct access to configuration and authentication files.
+### 3. Appliquer un contrôle d’accès strict côté serveur
+- Mettre en place des restrictions au niveau des répertoires via la configuration serveur (ex. `.htaccess`, règles Nginx).
+- Interdire l’accès direct aux fichiers de configuration et d’authentification.
 
-### 4. Use strong hashing for stored credentials
-- Replace MD5 with slow, salted password hashing algorithms such as:
+### 4. Utiliser un hachage robuste pour les identifiants
+- Remplacer MD5 par des algorithmes de dérivation de clés lents et salés, tels que :
   - `bcrypt`
   - `Argon2`
   - `PBKDF2`
-- Rotate all credentials exposed during evaluation.
+- Faire une rotation de tous les identifiants exposés.
 
-### 5. Harden the admin interface
-- Add a rate limiter, enforce strong passwords, and implement lockout thresholds.
-- Consider two-factor authentication for sensitive panels.
+### 5. Renforcer l’interface d’administration
+- Ajouter une limitation de tentatives, imposer des mots de passe forts et des seuils de blocage.
+- Envisager une authentification à deux facteurs pour les interfaces sensibles.
 
-### 6. Improve monitoring and logging
-- Log failed login attempts.
-- Detect suspicious enumeration patterns.
-- Alert when abnormal access to sensitive paths occurs.
+### 6. Améliorer la journalisation et la surveillance
+- Journaliser les tentatives de connexion échouées.
+- Détecter les schémas d’énumération suspects.
+- Déclencher des alertes lors d’accès anormaux à des chemins sensibles.
 
 ---
 
-## Secure configuration pattern (examples)
+## Modèles de configuration sécurisée (exemples)
 
-### Move `.htpasswd` outside the document root
+### Déplacer `.htpasswd` hors de la racine web
 ```
 /var/www/darkly/               (public)
-/etc/darkly/auth/.htpasswd     (private)
+/etc/darkly/auth/.htpasswd     (privé)
 ```
-Web server config should reference the private path explicitly.
+La configuration du serveur web doit référencer explicitement le chemin privé.
 
-### Deny direct access with server rules (Apache example)
+### Interdire l’accès direct via des règles serveur (exemple Apache)
 ```
 <FilesMatch "^(\.htpasswd|\.htaccess)$">
   Require all denied
 </FilesMatch>
 ```
 
-### Example of strong hashing (pseudo-code)
+### Exemple de hachage robuste (pseudo-code)
 ```
 stored_hash = bcrypt.hash(password_input)
 verify(password_input, stored_hash)
@@ -133,29 +133,26 @@ verify(password_input, stored_hash)
 
 ---
 
-## Detection and verification
-- **Pre-fix detection:** Confirm accessibility of `/whatever` and `.htpasswd` through direct URLs.
-- **Post-fix verification:** Attempting to access these resources must now return `403 Forbidden` or `404 Not Found`.
-- **Credential testing:** MD5-hashed passwords should no longer be present in the system.
-- **Admin panel test:** The `/admin` page must require valid credentials and should not be accessible through any leaked or legacy passwords.
+## Détection et vérification
+- **Avant correctif :** Vérifier l’accessibilité de `/whatever` et de `.htpasswd` via des URLs directes.
+- **Après correctif :** Toute tentative d’accès doit retourner `403 Forbidden` ou `404 Not Found`.
+- **Audit des identifiants :** Aucun mot de passe haché en MD5 ne doit subsister.
+- **Test du panneau admin :** La page `/admin` doit exiger des identifiants valides et ne pas être accessible via des mots de passe divulgués.
 
 ---
 
-## Fix validation checklist
-- [ ] `.htpasswd` is removed from the public directory.
-- [ ] Direct access to sensitive files is denied.
-- [ ] Admin password hashing upgraded to a modern, slow KDF.
-- [ ] `robots.txt` no longer exposes sensitive directory names.
-- [ ] Logging and alerts enabled for suspicious access.
-- [ ] Re-penetration test performed to confirm mitigation.
+## Checklist de validation des correctifs
+- [ ] `.htpasswd` supprimé de la racine publique.
+- [ ] Accès direct aux fichiers sensibles interdit.
+- [ ] Hachage des mots de passe admin migré vers un KDF moderne.
+- [ ] `robots.txt` n’expose plus de répertoires sensibles.
+- [ ] Journalisation et alertes activées.
+- [ ] Test de pénétration de revalidation effectué.
 
 ---
 
-## Recommendations for further hardening
-1. Conduct a full audit of the filesystem to ensure no other sensitive files are web-accessible.
-2. Implement regular password rotation and enforce stricter complexity requirements.
-3. Add automated scanning tools to detect weak hashing or exposed files.
-4. Perform periodic security reviews after feature updates.
-
----
-
+## Recommandations supplémentaires
+1. Réaliser un audit complet du système de fichiers pour vérifier qu’aucun autre fichier sensible n’est accessible via le web.
+2. Mettre en place une rotation régulière des mots de passe et des règles de complexité renforcées.
+3. Ajouter des outils d’analyse automatisée pour détecter les hachages faibles ou les fichiers exposés.
+4. Effectuer des revues de sécurité périodiques après chaque évolution fonctionnelle.
